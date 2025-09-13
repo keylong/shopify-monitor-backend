@@ -1,0 +1,51 @@
+# Leapcell Configuration for Shopify Monitor API
+
+app_name = "shopify-monitor-api"
+app_language = "python"
+app_entry_point = "app.main:app"
+
+[build]
+python_version = "3.11"
+requirements_file = "requirements.txt"
+
+[deploy]
+platform = "leapcell"
+region = "auto"
+instances = 1
+memory = 512
+cpu = 0.5
+
+[environment]
+APP_NAME = "Shopify Monitor API"
+APP_VERSION = "1.0.0"
+ENVIRONMENT = "production"
+DEBUG = "false"
+HOST = "0.0.0.0"
+PORT = "8000"
+WORKERS = "4"
+LOG_LEVEL = "INFO"
+LOG_FILE = "logs/app.log"
+ENABLE_SCHEDULER = "true"
+DEFAULT_SCAN_INTERVAL = "3600"
+
+# Note: These will be provided by Leapcell or set in dashboard
+# DATABASE_URL = "postgresql://..."
+# SECRET_KEY = "..."
+# API_KEYS = '["..."]'
+# CORS_ORIGINS = '["..."]'
+
+[health_check]
+path = "/health"
+interval = 30
+timeout = 10
+success_codes = [200]
+
+[scaling]
+min_instances = 1
+max_instances = 5
+target_cpu_percent = 70
+target_memory_percent = 80
+
+[network]
+port = 8000
+protocol = "http"
