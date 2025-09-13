@@ -299,11 +299,16 @@ async def general_exception_handler(request, exc):
 
 
 if __name__ == "__main__":
+    import os
+    # Get host and port from environment or settings
+    host = os.getenv("HOST", settings.host)
+    port = int(os.getenv("PORT", settings.port))
+    
     uvicorn.run(
         "app.main:app",
-        host=settings.host,
-        port=settings.port,
+        host=host,  # Must be 0.0.0.0 for container
+        port=port,
         reload=settings.debug,
-        workers=settings.workers if not settings.debug else 1,
+        workers=1,  # Single worker for Leapcell
         log_level=settings.log_level.lower()
     )
