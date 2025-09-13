@@ -22,13 +22,34 @@ from app.scheduler import scheduler
 from app.routers import stores, monitor, analytics, webhooks
 
 # Configure logging
-logger.add(
-    settings.log_file,
-    rotation="10 MB",
-    retention="7 days",
-    level=settings.log_level,
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {module}:{function}:{line} - {message}"
-)
+# Only add file logging if not in read-only environment (like Leapcell)
+import os
+import sys
+
+# Check if we can write to filesystem
+if os.environ.get("ENVIRONMENT") != "production":
+    try:
+        logger.add(
+            settings.log_file,
+            rotation="10 MB",
+            retention="7 days",
+            level=settings.log_level,
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {module}:{function}:{line} - {message}"
+        )
+    except (OSError, PermissionError):
+        # Fallback to stdout only
+        logger.add(
+            sys.stdout,
+            level=settings.log_level,
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {module}:{function}:{line} - {message}"
+        )
+else:
+    # In production, only log to stdout
+    logger.add(
+        sys.stdout,
+        level=settings.log_level,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {module}:{function}:{line} - {message}"
+    )
 
 # API Key Security
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
