@@ -13,6 +13,7 @@ selectolax==0.3.17  # Faster HTML parsing
 # Database
 sqlalchemy==2.0.23
 alembic==1.13.0
+psycopg2-binary==2.9.9  # PostgreSQL driver
 
 # Cache & Queue
 redis==5.0.1

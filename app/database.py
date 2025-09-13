@@ -27,32 +27,45 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Create engine with appropriate settings
-if "sqlite" in DATABASE_URL:
-    # SQLite settings
-    if ":memory:" in DATABASE_URL:
-        # In-memory database settings
-        engine = create_engine(
-            DATABASE_URL,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False
-        )
+try:
+    if "sqlite" in DATABASE_URL:
+        # SQLite settings
+        if ":memory:" in DATABASE_URL:
+            # In-memory database settings
+            engine = create_engine(
+                DATABASE_URL,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False
+            )
+        else:
+            # File-based SQLite settings
+            engine = create_engine(
+                DATABASE_URL,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False
+            )
     else:
-        # File-based SQLite settings
+        # PostgreSQL settings for production
         engine = create_engine(
             DATABASE_URL,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,
             echo=False
         )
-else:
-    # PostgreSQL settings for production
+except ImportError as e:
+    # If psycopg2 is not installed but DATABASE_URL points to PostgreSQL,
+    # fall back to in-memory SQLite
+    logger.error(f"Database driver not found: {e}")
+    logger.warning("Falling back to in-memory SQLite database")
+    DATABASE_URL = "sqlite:///:memory:"
     engine = create_engine(
         DATABASE_URL,
-        pool_size=10,
-        max_overflow=20,
-        pool_pre_ping=True,
-        pool_recycle=3600,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False
     )
 
