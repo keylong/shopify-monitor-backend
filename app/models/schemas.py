@@ -2,7 +2,7 @@
 Pydantic schemas for request/response validation
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, HttpUrl
 from datetime import datetime
 from enum import Enum
@@ -64,7 +64,7 @@ class Store(StoreBase):
 
 class VariantInfo(BaseModel):
     """Variant information schema"""
-    id: str
+    id: Union[int, str]
     title: str
     sku: Optional[str] = None
     price: Optional[str] = None
@@ -76,7 +76,7 @@ class VariantInfo(BaseModel):
 
 class ProductInfo(BaseModel):
     """Product information schema"""
-    id: str
+    id: Union[int, str]
     title: str
     handle: Optional[str] = None
     vendor: Optional[str] = None
