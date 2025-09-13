@@ -75,10 +75,15 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database initialized")
     
-    # Start scheduler if enabled
+    # Start scheduler if enabled and not using in-memory database
     if settings.enable_scheduler:
-        scheduler.start()
-        logger.info("✅ Scheduler started")
+        # Don't start scheduler with in-memory database as data won't persist
+        from app.database import DATABASE_URL
+        if ":memory:" in DATABASE_URL:
+            logger.warning("⚠️ Scheduler disabled - using in-memory database")
+        else:
+            scheduler.start()
+            logger.info("✅ Scheduler started")
     
     yield
     

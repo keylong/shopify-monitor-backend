@@ -10,10 +10,17 @@ import os
 from loguru import logger
 
 # Database URL from environment
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///./shopify_monitor.db"  # Default to SQLite for development
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# If no DATABASE_URL is provided, use in-memory SQLite for production
+if not DATABASE_URL:
+    if os.getenv("ENVIRONMENT") == "production":
+        # Use in-memory database for production if no external DB provided
+        DATABASE_URL = "sqlite:///:memory:"
+        logger.warning("No DATABASE_URL provided, using in-memory SQLite database. Data will not persist!")
+    else:
+        # Use file-based SQLite for development
+        DATABASE_URL = "sqlite:///./shopify_monitor.db"
 
 # Handle PostgreSQL URL format for production
 if DATABASE_URL.startswith("postgres://"):
@@ -21,13 +28,23 @@ if DATABASE_URL.startswith("postgres://"):
 
 # Create engine with appropriate settings
 if "sqlite" in DATABASE_URL:
-    # SQLite settings for development
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-        echo=False
-    )
+    # SQLite settings
+    if ":memory:" in DATABASE_URL:
+        # In-memory database settings
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False
+        )
+    else:
+        # File-based SQLite settings
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False
+        )
 else:
     # PostgreSQL settings for production
     engine = create_engine(
