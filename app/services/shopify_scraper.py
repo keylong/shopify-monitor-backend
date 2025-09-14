@@ -79,10 +79,14 @@ class ShopifyScraperService:
             await self._clear_cart()
             
             # Step 4: Batch add to cart with smart error handling
+            logger.info(f"📦 开始批量添加 {len(valid_items)} 个商品到购物车")
             added_count, failed_count = await self._smart_batch_add(valid_items)
+            logger.info(f"✅ 批量添加完成: 成功 {added_count} 个, 失败 {failed_count} 个")
             
             # Step 5: Extract inventory
+            logger.info("📊 开始提取库存信息")
             inventory = await self._extract_inventory()
+            logger.info(f"✅ 库存提取完成: 获取到 {len(inventory)} 个商品的库存信息")
             
             # Calculate statistics
             elapsed = (datetime.utcnow() - start_time).total_seconds()
@@ -241,21 +245,35 @@ class ShopifyScraperService:
         """
         Smart batch addition with error recovery
         """
+        if not items:
+            logger.warning("⚠️ 没有可添加的有效商品")
+            return 0, 0
+            
         added_count = 0
         failed_count = 0
+        total_batches = (len(items) + batch_size - 1) // batch_size
+        
+        logger.info(f"🛒 准备分 {total_batches} 个批次添加商品 (每批 {batch_size} 个)")
         
         for i in range(0, len(items), batch_size):
             batch = items[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
             
             # Filter blacklisted items
+            original_count = len(batch)
             batch = [item for item in batch if item["id"] not in self.blacklist]
             
+            if original_count != len(batch):
+                logger.debug(f"🚫 批次 {batch_num}: 过滤了 {original_count - len(batch)} 个黑名单商品")
+            
             if not batch:
+                logger.debug(f"⏭️ 批次 {batch_num}: 全部为黑名单商品，跳过")
                 continue
             
             cart_items = [{"id": item["id"], "quantity": 1} for item in batch]
             
             try:
+                logger.debug(f"📦 批次 {batch_num}/{total_batches}: 尝试添加 {len(batch)} 个商品")
                 response = self.scraper.post(
                     f"{self.store_url}/cart/add.js",
                     json={"items": cart_items},
@@ -264,17 +282,27 @@ class ShopifyScraperService:
                 
                 if response.status_code == 200:
                     added_count += len(batch)
+                    logger.info(f"✅ 批次 {batch_num}: 成功添加 {len(batch)} 个商品")
                 elif response.status_code == 422:
-                    # Handle 422 errors by identifying problem items
-                    failed_count += await self._handle_422_error(batch, response)
+                    logger.warning(f"⚠️ 批次 {batch_num}: 遇到422错误，处理问题商品")
+                    batch_failed = await self._handle_422_error(batch, response)
+                    failed_count += batch_failed
+                    logger.info(f"❌ 批次 {batch_num}: {batch_failed} 个商品添加失败")
                 else:
                     failed_count += len(batch)
+                    logger.error(f"❌ 批次 {batch_num}: HTTP {response.status_code} 错误")
                     
             except Exception as e:
-                logger.error(f"Batch add error: {e}")
+                logger.error(f"❌ 批次 {batch_num}: 网络错误 - {str(e)}")
                 failed_count += len(batch)
             
-            await asyncio.sleep(0.3)  # Rate limiting
+            # 批次间延迟
+            if i + batch_size < len(items):
+                await asyncio.sleep(0.3)
+        
+        # 最终统计
+        success_rate = (added_count / len(items)) * 100 if items else 0
+        logger.info(f"📊 添加统计: 成功 {added_count} 个, 失败 {failed_count} 个 (成功率: {success_rate:.1f}%)")
         
         return added_count, failed_count
     
@@ -300,25 +328,53 @@ class ShopifyScraperService:
         Extract inventory from cart page using multiple parsing methods
         """
         try:
+            logger.debug("📄 获取购物车页面...")
             response = self.scraper.get(f"{self.store_url}/cart")
             html = response.text
+            logger.debug(f"✅ 购物车页面获取成功 (长度: {len(html)} 字符)")
+            
+            # Check if cart is empty first
+            if 'cart is empty' in html.lower() or 'your cart is empty' in html.lower():
+                logger.warning("⚠️ 购物车为空！无法获取库存信息")
+                return {}
             
             # Try fast parsing with selectolax first
+            logger.debug("🔍 尝试使用 selectolax 解析库存...")
             inventory = self._parse_with_selectolax(html)
+            if inventory:
+                logger.info(f"✅ selectolax 解析成功: 找到 {len(inventory)} 个商品的库存")
+                self._log_inventory_samples(inventory, "selectolax")
             
             # Fallback to BeautifulSoup if needed
             if not inventory:
+                logger.debug("🔍 selectolax 未找到库存，尝试 BeautifulSoup...")
                 inventory = self._parse_with_beautifulsoup(html)
+                if inventory:
+                    logger.info(f"✅ BeautifulSoup 解析成功: 找到 {len(inventory)} 个商品的库存")
+                    self._log_inventory_samples(inventory, "BeautifulSoup")
             
             # Try cart.js API as last resort
             if not inventory:
+                logger.debug("🔍 HTML解析未找到库存，尝试 cart.js API...")
                 inventory = await self._get_from_cart_api()
+                if inventory:
+                    logger.info(f"✅ cart.js API 成功: 找到 {len(inventory)} 个商品的库存")
+                    self._log_inventory_samples(inventory, "cart.js API")
+            
+            # Final check
+            if not inventory:
+                logger.error("❌ 所有方法都未能获取到库存信息")
+                await self._debug_cart_status()
+            else:
+                # Calculate total inventory
+                total_stock = sum(inventory.values())
+                logger.info(f"📊 库存统计: 总计 {total_stock} 件商品")
             
             self.inventory_map = inventory
             return inventory
             
         except Exception as e:
-            logger.error(f"Inventory extraction failed: {e}")
+            logger.error(f"❌ 库存提取失败: {str(e)}")
             return {}
     
     def _parse_with_selectolax(self, html: str) -> Dict[str, int]:
@@ -326,29 +382,67 @@ class ShopifyScraperService:
         inventory = {}
         parser = HTMLParser(html)
         
-        for input_tag in parser.css('input[type="number"]'):
+        # Find all number input elements
+        input_tags = parser.css('input[type="number"]')
+        logger.debug(f"🔍 找到 {len(input_tags)} 个数量输入框")
+        
+        if len(input_tags) > 0:
+            # Show first few input examples for debugging
+            logger.debug("📝 输入框示例 (前2个):")
+            for i, input_tag in enumerate(input_tags[:2]):
+                attrs_str = " ".join([f'{k}="{v}"' for k, v in input_tag.attributes.items()])
+                logger.debug(f"  Input {i+1}: <input {attrs_str[:200]}...>")
+        
+        detected_methods = set()
+        
+        for input_tag in input_tags:
             attrs = input_tag.attributes
             
-            # Extract variant ID
-            variant_id = (
-                attrs.get("data-variant-id") or
-                attrs.get("data-id") or
-                attrs.get("id", "")
-            )
+            # Extract variant ID (try multiple patterns)
+            variant_id = None
+            id_patterns = [
+                ("data-variant-id", attrs.get("data-variant-id")),
+                ("data-id", attrs.get("data-id")),
+                ("id", attrs.get("id", "")),
+                ("name", attrs.get("name", ""))
+            ]
             
-            # Extract inventory
-            max_stock = (
-                attrs.get("max") or
-                attrs.get("data-inventory-quantity") or
-                attrs.get("data-max")
-            )
+            for pattern_name, value in id_patterns:
+                if value:
+                    import re
+                    # Look for long numeric IDs (Shopify variant IDs are usually 10+ digits)
+                    match = re.search(r'\d{10,}', str(value))
+                    if match:
+                        variant_id = match.group()
+                        break
             
-            if variant_id and max_stock:
-                # Extract numeric ID
-                import re
-                match = re.search(r'\d{10,}', str(variant_id))
-                if match:
-                    inventory[match.group()] = int(max_stock)
+            # Extract inventory (try multiple attributes)
+            max_stock = None
+            inventory_patterns = [
+                ("max", attrs.get("max")),
+                ("data-inventory-quantity", attrs.get("data-inventory-quantity")),
+                ("data-max", attrs.get("data-max")),
+                ("data-stock", attrs.get("data-stock")),
+                ("data-inventory", attrs.get("data-inventory"))
+            ]
+            
+            detected_method = None
+            for pattern_name, value in inventory_patterns:
+                if value and str(value).isdigit():
+                    max_stock = int(value)
+                    detected_method = pattern_name
+                    detected_methods.add(pattern_name)
+                    break
+            
+            if variant_id and max_stock is not None and max_stock >= 0:
+                inventory[variant_id] = max_stock
+                logger.debug(f"  ✓ 变体 {variant_id}: {max_stock} 件 (通过 {detected_method})")
+            elif variant_id:
+                logger.debug(f"  ⚠️ 变体 {variant_id}: 未找到库存属性")
+        
+        # Log detection summary
+        if detected_methods:
+            logger.debug(f"🔧 检测到的库存属性: {', '.join(detected_methods)}")
         
         return inventory
     
@@ -440,6 +534,51 @@ class ShopifyScraperService:
         
         return processed
     
+    def _log_inventory_samples(self, inventory: Dict[str, int], method: str):
+        """Log sample inventory data for debugging"""
+        if not inventory:
+            return
+            
+        logger.debug(f"📦 {method} 发现的库存样本 (前5个):")
+        samples = list(inventory.items())[:5]
+        for variant_id, stock in samples:
+            logger.debug(f"  变体ID {variant_id}: {stock} 件")
+        
+        if len(inventory) > 5:
+            logger.debug(f"  ... 还有 {len(inventory) - 5} 个")
+    
+    async def _debug_cart_status(self):
+        """Debug cart status when inventory extraction fails"""
+        try:
+            logger.debug("🔧 调试购物车状态...")
+            
+            # Check cart.js
+            response = self.scraper.get(f"{self.store_url}/cart.js")
+            cart_data = response.json()
+            
+            logger.debug(f"🛒 购物车状态:")
+            logger.debug(f"  商品数量: {len(cart_data.get('items', []))}")
+            logger.debug(f"  总价格: {cart_data.get('total_price', 0)}")
+            
+            if cart_data.get('items'):
+                logger.debug("  商品详情 (前3个):")
+                for i, item in enumerate(cart_data['items'][:3]):
+                    logger.debug(f"    {i+1}. {item.get('title', 'Unknown')}")
+                    logger.debug(f"       变体ID: {item.get('variant_id', item.get('id'))}")
+                    logger.debug(f"       数量: {item.get('quantity')}")
+                    
+                    # Check for inventory fields
+                    inventory_fields = ['inventory_quantity', 'inventory', 'max_quantity', 'available']
+                    for field in inventory_fields:
+                        if field in item:
+                            logger.debug(f"       {field}: {item[field]} ✓")
+            else:
+                logger.warning("⚠️ 购物车为空 - 这是库存获取失败的主要原因")
+                logger.info("💡 请检查商品添加步骤是否成功")
+                
+        except Exception as e:
+            logger.error(f"调试购物车状态失败: {e}")
+
     async def close(self):
         """Clean up resources"""
         await self.async_client.aclose()

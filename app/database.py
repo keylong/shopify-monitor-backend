@@ -53,8 +53,12 @@ try:
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            pool_recycle=3600,
-            echo=False
+            pool_recycle=1800,  # Recycle connections every 30 minutes
+            pool_timeout=30,
+            echo=False,
+            connect_args={
+                "options": "-c statement_timeout=30s -c idle_in_transaction_session_timeout=60s"
+            }
         )
 except ImportError as e:
     # If psycopg2 is not installed but DATABASE_URL points to PostgreSQL,
