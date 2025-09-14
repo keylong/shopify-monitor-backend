@@ -141,23 +141,39 @@ class MonitorScheduler:
     async def save_inventory_history(self, db, store, result):
         """Save inventory history records"""
         products = result.get("products", [])
+        inventory_data = result.get("inventory", {})
+        
+        # 只有成功获取到库存数据才保存历史记录
+        if not inventory_data:
+            logger.warning("⚠️ 没有库存数据，跳过历史记录保存")
+            return
+        
+        saved_count = 0
         
         for product in products:
             for variant in product.get("variants", []):
                 if not variant.get("is_valid"):
+                    continue
+                
+                # 只保存真正有库存数据的变体
+                variant_id = str(variant.get("id"))
+                if variant_id not in inventory_data:
                     continue
                     
                 history = InventoryHistory(
                     store_id=store.id,
                     product_id=str(product.get("id")),
                     product_title=product.get("title"),
-                    variant_id=str(variant.get("id")),
+                    variant_id=variant_id,
                     variant_title=variant.get("title"),
                     stock=variant.get("stock", 0),
                     price=variant.get("price"),
                     sku=variant.get("sku")
                 )
                 db.add(history)
+                saved_count += 1
+                
+        logger.info(f"✅ 保存了 {saved_count} 条库存历史记录")
                 
     async def check_stock_alerts(self, db, store, result):
         """Check for stock alerts"""

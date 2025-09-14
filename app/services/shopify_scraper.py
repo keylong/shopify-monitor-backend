@@ -91,8 +91,16 @@ class ShopifyScraperService:
             # Calculate statistics
             elapsed = (datetime.utcnow() - start_time).total_seconds()
             
+            # 检查库存获取是否成功
+            inventory_success = len(inventory) > 0
+            if not inventory_success:
+                logger.error("❌ 库存获取失败: 没有获取到任何库存信息")
+            
+            # 只有在成功添加商品且成功获取库存的情况下才算扫描成功
+            scan_success = added_count > 0 and inventory_success
+            
             result = {
-                "success": True,
+                "success": scan_success,
                 "store_url": self.store_url,
                 "timestamp": datetime.utcnow().isoformat(),
                 "scan_duration": elapsed,
@@ -105,10 +113,14 @@ class ShopifyScraperService:
                     "total_stock": sum(inventory.values())
                 },
                 "products": self._process_products_data(products, inventory, valid_items),
-                "inventory": inventory
+                "inventory": inventory,
+                "error": None if scan_success else "商品添加或库存获取失败"
             }
             
-            logger.info(f"✅ Scan completed in {elapsed:.2f}s")
+            if scan_success:
+                logger.info(f"✅ 扫描成功完成: {elapsed:.2f}s, 获取到 {sum(inventory.values())} 件商品库存")
+            else:
+                logger.error(f"❌ 扫描失败: {elapsed:.2f}s, 原因: {result['error']}")
             return result
             
         except Exception as e:
