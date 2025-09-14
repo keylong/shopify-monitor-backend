@@ -10,7 +10,7 @@ from typing import Optional
 import asyncio
 
 from app.database import SessionLocal, get_db_session
-from app.models.database import Store, ScanResult, InventoryHistory, StockAlert
+from app.models.database import Store, ScanResult
 from app.services.shopify_scraper import ShopifyScraperService
 
 
@@ -127,7 +127,7 @@ class MonitorScheduler:
                 logger.warning(f"Error closing store info session: {e}")
     
     async def _save_scan_results(self, store_id: int, store_info: dict, result: dict):
-        """Save scan results with fresh DB connection"""
+        """Save scan results with fresh DB connection - PURE DATA STORAGE"""
         db = get_db_session()
         try:
             # Get fresh store instance
@@ -135,7 +135,7 @@ class MonitorScheduler:
             if not store:
                 return
                 
-            # Save scan result
+            # Save scan result only - NO business logic
             scan_result = ScanResult(
                 store_id=store.id,
                 success=result.get("success", False),
@@ -152,134 +152,33 @@ class MonitorScheduler:
             )
             db.add(scan_result)
             
-            # Update store statistics
+            # Update basic store statistics only
             if result.get("success"):
                 store.last_scan = datetime.utcnow()
-                store.next_scan = datetime.utcnow() + timedelta(seconds=store.scan_interval)
+                store.next_scan = datetime.utcnow() + timedelta(seconds=store_info.get('scan_interval', 3600))
                 store.total_products = scan_result.total_products
                 store.total_variants = scan_result.valid_variants
                 store.total_stock = scan_result.total_stock
-                
-                # Save inventory history
-                await self.save_inventory_history(db, store, result)
-                
-                # Check for stock alerts  
-                await self.check_stock_alerts(db, store, result)
             
             db.commit()
-            logger.info(f"✅ Scan completed for {store_info['name']}")
+            logger.info(f"✅ 扫描数据已保存: {store_info['name']}")
             
         except Exception as e:
-            logger.error(f"Error saving scan results for store {store_id}: {e}")
+            logger.error(f"保存扫描结果错误 store {store_id}: {e}")
             try:
                 db.rollback()
             except Exception as rollback_error:
-                logger.error(f"Error during rollback: {rollback_error}")
+                logger.error(f"回滚错误: {rollback_error}")
             raise
         finally:
             try:
                 db.close()
             except Exception as e:
-                logger.warning(f"Error closing save results session: {e}")
+                logger.warning(f"关闭数据库会话错误: {e}")
             
-    async def save_inventory_history(self, db, store, result):
-        """Save inventory history records"""
-        products = result.get("products", [])
-        inventory_data = result.get("inventory", {})
-        
-        # 只有成功获取到库存数据才保存历史记录
-        if not inventory_data:
-            logger.warning("⚠️ 没有库存数据，跳过历史记录保存")
-            return
-        
-        saved_count = 0
-        
-        for product in products:
-            for variant in product.get("variants", []):
-                if not variant.get("is_valid"):
-                    continue
-                
-                # 只保存真正有库存数据的变体
-                variant_id = str(variant.get("id"))
-                if variant_id not in inventory_data:
-                    continue
-                    
-                history = InventoryHistory(
-                    store_id=store.id,
-                    product_id=str(product.get("id")),
-                    product_title=product.get("title"),
-                    variant_id=variant_id,
-                    variant_title=variant.get("title"),
-                    stock=variant.get("stock", 0),
-                    price=variant.get("price"),
-                    sku=variant.get("sku")
-                )
-                db.add(history)
-                saved_count += 1
-                
-        logger.info(f"✅ 保存了 {saved_count} 条库存历史记录")
-                
-    async def check_stock_alerts(self, db, store, result):
-        """Check for stock alerts"""
-        if not store.notify_low_stock:
-            return
-            
-        products = result.get("products", [])
-        
-        for product in products:
-            for variant in product.get("variants", []):
-                if not variant.get("is_valid"):
-                    continue
-                    
-                stock = variant.get("stock", 0)
-                
-                # Check for low stock
-                if 0 < stock <= store.low_stock_threshold:
-                    # Check if alert already exists
-                    existing = db.query(StockAlert).filter(
-                        StockAlert.store_id == store.id,
-                        StockAlert.variant_id == str(variant.get("id")),
-                        StockAlert.resolved == False
-                    ).first()
-                    
-                    if not existing:
-                        alert = StockAlert(
-                            store_id=store.id,
-                            product_id=str(product.get("id")),
-                            product_title=product.get("title"),
-                            variant_id=str(variant.get("id")),
-                            variant_title=variant.get("title"),
-                            alert_type="low_stock",
-                            current_stock=stock,
-                            threshold=store.low_stock_threshold
-                        )
-                        db.add(alert)
-                        logger.warning(f"⚠️ Low stock alert: {product.get('title')} - {variant.get('title')}: {stock}")
-                        
-                # Check for out of stock
-                elif stock == 0:
-                    existing = db.query(StockAlert).filter(
-                        StockAlert.store_id == store.id,
-                        StockAlert.variant_id == str(variant.get("id")),
-                        StockAlert.resolved == False
-                    ).first()
-                    
-                    if not existing:
-                        alert = StockAlert(
-                            store_id=store.id,
-                            product_id=str(product.get("id")),
-                            product_title=product.get("title"),
-                            variant_id=str(variant.get("id")),
-                            variant_title=variant.get("title"),
-                            alert_type="out_of_stock",
-                            current_stock=0,
-                            threshold=0
-                        )
-                        db.add(alert)
-                        logger.warning(f"🚫 Out of stock: {product.get('title')} - {variant.get('title')}")
                         
     async def cleanup_old_data(self):
-        """Clean up old data"""
+        """Clean up old scan results only"""
         db = SessionLocal()
         try:
             # Delete scan results older than 30 days
@@ -288,18 +187,11 @@ class MonitorScheduler:
                 ScanResult.timestamp < cutoff
             ).delete()
             
-            # Delete resolved alerts older than 7 days
-            alert_cutoff = datetime.utcnow() - timedelta(days=7)
-            deleted_alerts = db.query(StockAlert).filter(
-                StockAlert.resolved == True,
-                StockAlert.resolved_at < alert_cutoff
-            ).delete()
-            
             db.commit()
-            logger.info(f"🧹 Cleanup: Deleted {deleted} old scan results and {deleted_alerts} resolved alerts")
+            logger.info(f"🧹 清理完成: 删除了 {deleted} 条旧的扫描记录")
             
         except Exception as e:
-            logger.error(f"Error in cleanup: {e}")
+            logger.error(f"清理数据错误: {e}")
             db.rollback()
         finally:
             db.close()
