@@ -9,7 +9,7 @@ from loguru import logger
 from typing import Optional
 import asyncio
 
-from app.database import SessionLocal
+from app.database import SessionLocal, get_db_session
 from app.models.database import Store, ScanResult, InventoryHistory, StockAlert
 from app.services.shopify_scraper import ShopifyScraperService
 
@@ -79,21 +79,62 @@ class MonitorScheduler:
             return
             
         self.running_scans.add(store_id)
-        db = SessionLocal()
         
         try:
-            store = db.query(Store).filter(Store.id == store_id).first()
+            # Step 1: Get store info (short DB connection)
+            store = await self._get_store_info(store_id)
             if not store:
                 return
                 
             logger.info(f"🔍 Scanning store: {store.name}")
             
-            # Create scraper instance
+            # Step 2: Perform scan (no DB connection held)
             scraper = ShopifyScraperService(store.url)
-            
-            # Perform scan
             result = await scraper.scan_inventory()
+            await scraper.close()
             
+            # Step 3: Save results (new DB connection)
+            await self._save_scan_results(store_id, store, result)
+            
+        except Exception as e:
+            logger.error(f"Error scanning store {store_id}: {e}")
+        finally:
+            self.running_scans.discard(store_id)
+    
+    async def _get_store_info(self, store_id: int):
+        """Get store information with short-lived connection"""
+        db = get_db_session()
+        try:
+            store = db.query(Store).filter(Store.id == store_id).first()
+            if store:
+                # Convert to dict to avoid detached instance issues
+                return {
+                    'id': store.id,
+                    'name': store.name,
+                    'url': store.url,
+                    'scan_interval': store.scan_interval,
+                    'notify_low_stock': store.notify_low_stock,
+                    'low_stock_threshold': store.low_stock_threshold
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting store info: {e}")
+            return None
+        finally:
+            try:
+                db.close()
+            except Exception as e:
+                logger.warning(f"Error closing store info session: {e}")
+    
+    async def _save_scan_results(self, store_id: int, store_info: dict, result: dict):
+        """Save scan results with fresh DB connection"""
+        db = get_db_session()
+        try:
+            # Get fresh store instance
+            store = db.query(Store).filter(Store.id == store_id).first()
+            if not store:
+                return
+                
             # Save scan result
             scan_result = ScanResult(
                 store_id=store.id,
@@ -122,21 +163,24 @@ class MonitorScheduler:
                 # Save inventory history
                 await self.save_inventory_history(db, store, result)
                 
-                # Check for stock alerts
+                # Check for stock alerts  
                 await self.check_stock_alerts(db, store, result)
             
             db.commit()
-            logger.info(f"✅ Scan completed for {store.name}")
-            
-            # Cleanup
-            await scraper.close()
+            logger.info(f"✅ Scan completed for {store_info['name']}")
             
         except Exception as e:
-            logger.error(f"Error scanning store {store_id}: {e}")
-            db.rollback()
+            logger.error(f"Error saving scan results for store {store_id}: {e}")
+            try:
+                db.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Error during rollback: {rollback_error}")
+            raise
         finally:
-            self.running_scans.discard(store_id)
-            db.close()
+            try:
+                db.close()
+            except Exception as e:
+                logger.warning(f"Error closing save results session: {e}")
             
     async def save_inventory_history(self, db, store, result):
         """Save inventory history records"""

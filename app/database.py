@@ -50,14 +50,15 @@ try:
         # PostgreSQL settings for production
         engine = create_engine(
             DATABASE_URL,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            pool_recycle=1800,  # Recycle connections every 30 minutes
-            pool_timeout=30,
+            pool_size=5,          # 减少连接池大小
+            max_overflow=10,      # 减少溢出连接
+            pool_pre_ping=True,   # 连接前测试
+            pool_recycle=900,     # 15分钟回收连接
+            pool_timeout=20,      # 20秒获取连接超时
             echo=False,
             connect_args={
-                "options": "-c statement_timeout=30s -c idle_in_transaction_session_timeout=60s"
+                "options": "-c statement_timeout=60s -c idle_in_transaction_session_timeout=120s",
+                "application_name": "shopify_monitor"
             }
         )
 except ImportError as e:
@@ -86,8 +87,24 @@ def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        logger.error(f"Database session error: {e}")
+        db.rollback()
+        raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logger.warning(f"Error closing database session: {e}")
+
+def get_db_session():
+    """
+    Get a database session for manual management
+    
+    Returns:
+        Database session (must be closed manually)
+    """
+    return SessionLocal()
 
 def init_db():
     """
