@@ -101,7 +101,7 @@ class ScanStatistics(BaseModel):
 class ScanRequest(BaseModel):
     """Manual scan request schema"""
     store_url: HttpUrl
-    use_proxy: Optional[str] = None
+    use_proxy: bool = False
     save_results: bool = True
 
 

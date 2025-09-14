@@ -2,10 +2,10 @@
 Analytics and reporting routes
 """
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta
 import csv
 import io
@@ -13,6 +13,7 @@ import json
 
 from app.database import get_db
 from app.models.database import Store, ScanResult, InventoryHistory, StockAlert
+from app.models import schemas
 
 router = APIRouter()
 
@@ -344,3 +345,98 @@ async def get_daily_summary(
             "total_alerts": sum(a.count for a in alerts)
         }
     }
+
+
+@router.get("/inventory/{store_id}")
+async def get_inventory_history(
+    store_id: int,
+    product_id: Optional[str] = None,
+    variant_id: Optional[str] = None,
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db)
+):
+    """
+    Get inventory history for a store (matches frontend API call)
+    """
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    
+    query = db.query(InventoryHistory).filter(
+        InventoryHistory.store_id == store_id,
+        InventoryHistory.timestamp >= cutoff
+    )
+    
+    if product_id:
+        query = query.filter(InventoryHistory.product_id == product_id)
+    
+    if variant_id:
+        query = query.filter(InventoryHistory.variant_id == variant_id)
+    
+    history = query.order_by(InventoryHistory.timestamp.desc()).limit(1000).all()
+    
+    return {
+        "store_id": store_id,
+        "period_days": days,
+        "total_records": len(history),
+        "history": [
+            {
+                "timestamp": h.timestamp,
+                "product_id": h.product_id,
+                "product_title": h.product_title,
+                "variant_id": h.variant_id,
+                "variant_title": h.variant_title,
+                "stock": h.stock,
+                "price": h.price
+            }
+            for h in history
+        ]
+    }
+
+
+@router.get("/alerts", response_model=List[schemas.StockAlert])
+async def get_stock_alerts(
+    store_id: Optional[int] = None,
+    alert_type: Optional[str] = None,
+    resolved: Optional[bool] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db)
+):
+    """
+    Get stock alerts (moved from monitor router to match frontend API)
+    """
+    query = db.query(StockAlert)
+    
+    if store_id:
+        query = query.filter(StockAlert.store_id == store_id)
+    
+    if alert_type:
+        query = query.filter(StockAlert.alert_type == alert_type)
+    
+    if resolved is not None:
+        query = query.filter(StockAlert.resolved == resolved)
+    
+    alerts = query.order_by(
+        StockAlert.created_at.desc()
+    ).offset(skip).limit(limit).all()
+    
+    return alerts
+
+
+@router.post("/alerts/{alert_id}/resolve")
+async def resolve_alert(
+    alert_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Mark an alert as resolved (moved from monitor router)
+    """
+    alert = db.query(StockAlert).filter(StockAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    alert.resolved = True
+    alert.resolved_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return {"success": True, "message": "Alert resolved"}

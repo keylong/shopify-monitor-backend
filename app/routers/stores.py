@@ -74,7 +74,7 @@ async def create_store(
     return db_store
 
 
-@router.patch("/{store_id}", response_model=schemas.Store)
+@router.put("/{store_id}", response_model=schemas.Store)
 async def update_store(
     store_id: int,
     store_update: schemas.StoreUpdate,
@@ -98,6 +98,17 @@ async def update_store(
     db.refresh(store)
     
     return store
+
+@router.patch("/{store_id}", response_model=schemas.Store)
+async def patch_store(
+    store_id: int,
+    store_update: schemas.StoreUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Partially update a store (PATCH method)
+    """
+    return await update_store(store_id, store_update, db)
 
 
 @router.delete("/{store_id}")
@@ -136,6 +147,28 @@ async def get_scan_history(
     ).offset(skip).limit(limit).all()
     
     return scans
+
+
+@router.post("/{store_id}/toggle", response_model=schemas.Store)
+async def toggle_store(
+    store_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Toggle store enabled/disabled status
+    """
+    store = db.query(Store).filter(Store.id == store_id).first()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    
+    # Toggle the enabled status
+    store.enabled = not store.enabled
+    store.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(store)
+    
+    return store
 
 
 @router.post("/{store_id}/scan")

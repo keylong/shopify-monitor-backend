@@ -193,6 +193,69 @@ async def resolve_alert(
     return {"success": True, "message": "Alert resolved"}
 
 
+@router.post("/scan/{store_id}")
+async def scan_store(
+    store_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Trigger a scan for a specific store
+    """
+    from app.scheduler import scheduler
+    import asyncio
+    
+    store = db.query(Store).filter(Store.id == store_id).first()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    
+    # Trigger scan asynchronously
+    asyncio.create_task(scheduler.scan_store(store_id))
+    
+    return {
+        "success": True,
+        "message": f"Scan triggered for store: {store.name}",
+        "store_id": store_id
+    }
+
+
+@router.get("/history/{store_id}", response_model=List[schemas.ScanResult])
+async def get_scan_history(
+    store_id: int,
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Get scan history for a store
+    """
+    scans = db.query(ScanResult).filter(
+        ScanResult.store_id == store_id
+    ).order_by(
+        ScanResult.timestamp.desc()
+    ).limit(limit).all()
+    
+    return scans
+
+
+@router.get("/latest/{store_id}", response_model=schemas.ScanResult)
+async def get_latest_scan(
+    store_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the latest scan result for a store
+    """
+    scan = db.query(ScanResult).filter(
+        ScanResult.store_id == store_id
+    ).order_by(
+        ScanResult.timestamp.desc()
+    ).first()
+    
+    if not scan:
+        raise HTTPException(status_code=404, detail="No scan results found for this store")
+    
+    return scan
+
+
 @router.get("/low-stock-items")
 async def get_low_stock_items(
     threshold: int = Query(10, ge=0),
