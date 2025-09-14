@@ -19,7 +19,7 @@ from app.models.database import Base
 from app.services.shopify_scraper import ShopifyScraperService
 from app.database import engine, SessionLocal, get_db
 from app.scheduler import scheduler
-from app.routers import stores, monitor, analytics, webhooks
+from app.routers import stores, monitor, analytics, webhooks, data_processing
 
 # Configure logging
 # Only add file logging if not in read-only environment (like Leapcell)
@@ -266,6 +266,13 @@ app.include_router(
     webhooks.router,
     prefix="/api/v1/webhooks",
     tags=["Webhooks"],
+    dependencies=[Depends(verify_api_key)]
+)
+
+app.include_router(
+    data_processing.router,
+    prefix="/api/v1/data",
+    tags=["Data Processing"],
     dependencies=[Depends(verify_api_key)]
 )
 
